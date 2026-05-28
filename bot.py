@@ -288,6 +288,21 @@ async def run_monitor_loop(app):
         await asyncio.sleep(60)  # кожну хвилину
 
 
+async def run_web_server():
+    """Простий веб-сервер щоб Render не таймаутив."""
+    from aiohttp import web
+    async def health(request):
+        return web.Response(text="OK")
+    app = web.Application()
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Web server started on port {port}")
+
+
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -321,6 +336,7 @@ def main():
 
     async def post_init(application):
         asyncio.create_task(run_monitor_loop(application))
+        asyncio.create_task(run_web_server())
 
     app.post_init = post_init
     logger.info("Weather bot starting...")
