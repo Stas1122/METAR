@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from aiohttp import web
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -15,7 +16,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 WAITING_STATION = 1
-WAITING_THRESHOLD = 2
 
 monitor = WeatherMonitor()
 
@@ -56,9 +56,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`KORD` — Чикаго\n"
         "`KLAX` — Лос-Анджелес\n"
         "`CYYZ` — Торонто\n"
-        "`KBOS` — Бостон\n"
-        "`KDFW` — Даллас\n"
-        "`KPHX` — Фенікс"
+        "`KATL` — Атланта\n"
+        "`KMIA` — Маямі\n"
+        "`KSFO` — Сан-Франциско"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
@@ -84,7 +84,6 @@ async def receive_station(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return WAITING_STATION
 
-    # Перевіряємо чи станція існує
     await update.message.reply_text(f"⏳ Перевіряю станцію {station}...")
     temp_data = await monitor.fetch_metar(station)
 
@@ -111,12 +110,10 @@ async def receive_station(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Станцію додано!\n\n"
             f"✈️ *{station}*\n"
             f"🌡 Зараз: *{temp_f:.1f}°F* ({temp_c:.1f}°C)\n"
-            f"🟢 Моніторинг активний\n\n"
-            f"Сповіщення при кожній зміні температури.",
+            f"🟢 Моніторинг активний",
             parse_mode="Markdown",
             reply_markup=main_keyboard()
         )
-        logger.info(f"Added station {station} for chat {chat_id}")
 
     return ConversationHandler.END
 
@@ -140,10 +137,10 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["📋 *Активні станції:*\n"]
     for s in stations:
         code = s["code"]
-        last_temp = s.get("last_temp_f")
-        if last_temp:
+        last_temp_f = s.get("last_temp_f")
+        if last_temp_f:
             last_c = s.get("last_temp_c", 0)
-            lines.append(f"✈️ `{code}` — {last_temp:.1f}°F ({last_c:.1f}°C)")
+            lines.append(f"✈️ `{code}` — {last_temp_f:.1f}°F ({last_c:.1f}°C)")
         else:
             lines.append(f"✈️ `{code}` — очікую дані...")
 
@@ -218,20 +215,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Станцію `{code}` видалено.", parse_mode="Markdown")
 
 
-async def handle_keyboard_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "📋 Мої станції":
-        await list_command(update, context)
-    elif text == "🌡 Температура зараз":
-        await temp_command(update, context)
-    elif text == "🗑 Видалити":
-        await remove_command(update, context)
-    elif text == "📈 Статус":
-        await status_command(update, context)
-    elif text == "❓ Допомога":
-        await help_command(update, context)
-
-
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     stations = monitor.get_stations(chat_id)
@@ -249,6 +232,20 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def handle_keyboard_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "📋 Мої станції":
+        await list_command(update, context)
+    elif text == "🌡 Температура зараз":
+        await temp_command(update, context)
+    elif text == "🗑 Видалити":
+        await remove_command(update, context)
+    elif text == "📈 Статус":
+        await status_command(update, context)
+    elif text == "❓ Допомога":
+        await help_command(update, context)
+
+
 async def send_temp_notification(bot, chat_id: str, station: str, old_f: float, new_f: float,
                                   old_c: float, new_c: float, time_str: str):
     diff_f = new_f - old_f
@@ -264,11 +261,7 @@ async def send_temp_notification(bot, chat_id: str, station: str, old_f: float, 
     )
 
     try:
-        await bot.send_message(
-            chat_id=int(chat_id),
-            text=text,
-            parse_mode="Markdown"
-        )
+        await bot.send_message(chat_id=int(chat_id), text=text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Failed to send notification to {chat_id}: {e}")
 
@@ -285,17 +278,18 @@ async def run_monitor_loop(app):
                 )
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
-        await asyncio.sleep(60)  # кожну хвилину
+        await asyncio.sleep(60)
 
 
 async def run_web_server():
-    """Простий веб-сервер щоб Render не таймаутив."""
-    from aiohttp import web
+    """Веб-сервер щоб Render не таймаутив."""
     async def health(request):
         return web.Response(text="OK")
-    app = web.Application()
-    app.router.add_get("/", health)
-    runner = web.AppRunner(app)
+
+    webapp = web.Application()
+    webapp.router.add_get("/", health)
+    webapp.router.add_get("/health", health)
+    runner = web.AppRunner(webapp)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
@@ -335,8 +329,8 @@ def main():
     ))
 
     async def post_init(application):
+        await run_web_server()
         asyncio.create_task(run_monitor_loop(application))
-        asyncio.create_task(run_web_server())
 
     app.post_init = post_init
     logger.info("Weather bot starting...")
