@@ -140,13 +140,25 @@ class WeatherMonitor:
                     if not text.strip():
                         return None
 
-                    # Беремо перший рядок з METAR
+                    # Беремо перший рядок з METAR — шукаємо рядок зі станцією
                     lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
                     metar_line = None
+
+                    # Шукаємо рядок який містить станцію (METAR/SPECI + код)
                     for line in lines:
-                        if station in line:
-                            metar_line = line
-                            break
+                        upper = line.upper()
+                        if station in upper:
+                            # Беремо тільки перший METAR (не SPECI)
+                            if upper.startswith("METAR") or upper.startswith(station):
+                                metar_line = line
+                                break
+
+                    # Якщо не знайшли METAR — беремо перший рядок зі станцією
+                    if not metar_line:
+                        for line in lines:
+                            if station in line.upper():
+                                metar_line = line
+                                break
 
                     if not metar_line:
                         metar_line = lines[0] if lines else ""
